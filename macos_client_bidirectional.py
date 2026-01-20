@@ -229,16 +229,17 @@ class ClipboardSyncApp:
             log("请运行: pip3 install rumps")
             sys.exit(1)
 
-        # 状态图标 (用文字代替emoji，兼容性更好)
+        # 状态图标路径
+        icon_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'icons')
         self.icons = {
-            ConnectionState.CONNECTED: "●",
-            ConnectionState.CONNECTING: "◐",
-            ConnectionState.DISCONNECTED: "○"
+            ConnectionState.CONNECTED: os.path.join(icon_dir, 'connected.png'),
+            ConnectionState.CONNECTING: os.path.join(icon_dir, 'connecting.png'),
+            ConnectionState.DISCONNECTED: os.path.join(icon_dir, 'disconnected.png')
         }
 
         self.app = rumps.App(
             "剪贴板同步",
-            title=self.icons[ConnectionState.DISCONNECTED],
+            icon=self.icons[ConnectionState.DISCONNECTED],
             quit_button=None
         )
 
@@ -282,16 +283,17 @@ class ClipboardSyncApp:
                 state = self.state_queue.get_nowait()
             
             if state is not None:
-                new_icon = self.icons.get(state, "?")
-                self.app.title = new_icon
-                
+                new_icon = self.icons.get(state)
+                if new_icon and os.path.exists(new_icon):
+                    self.app.icon = new_icon
+
                 status_text = {
                     ConnectionState.CONNECTED: "状态: 已连接 ✓",
                     ConnectionState.CONNECTING: "状态: 连接中...",
                     ConnectionState.DISCONNECTED: "状态: 未连接"
                 }
                 self.status_item.title = status_text.get(state, "状态: 未知")
-                log(f"[GUI-主线程] 图标已更新: {new_icon}")
+                log(f"[GUI-主线程] 图标已更新: {state}")
         except Exception as e:
             log(f"[GUI] 检查队列失败: {e}")
 
