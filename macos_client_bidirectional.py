@@ -23,6 +23,15 @@ import queue  # 添加队列支持
 from datetime import datetime
 import os
 
+# macOS 原生剪贴板 API (通过 PyObjC)
+try:
+    from AppKit import NSPasteboard
+    _pasteboard = NSPasteboard.generalPasteboard()
+    _HAS_APPKIT = True
+except ImportError:
+    _pasteboard = None
+    _HAS_APPKIT = False
+
 # ============ 配置 ============
 SERVER_IP = "8.146.198.121"    # 默认服务器IP
 SERVER_PORT = "8000"           # 默认端口
@@ -56,17 +65,29 @@ def set_state(new_state):
             if gui_app:
                 gui_app.update_state(new_state)
 
+def get_clipboard_change_count():
+    """获取剪贴板变化计数 (极轻量，不读取实际内容)"""
+    if _HAS_APPKIT:
+        return _pasteboard.changeCount()
+    return None
+
 def get_clipboard():
-    """安全获取剪贴板内容 - 优先使用 pbpaste"""
+    """安全获取剪贴板内容"""
+    # 优先使用 AppKit 原生 API (无需启动子进程)
+    if _HAS_APPKIT:
+        try:
+            content = _pasteboard.stringForType_("public.utf8-plain-text")
+            return content if content else ""
+        except Exception:
+            pass
+    # 回退: pbpaste
     try:
-        # macOS 上 pbpaste 更可靠
         result = subprocess.run(['pbpaste'], capture_output=True, text=True, timeout=2)
         if result.returncode == 0:
             return result.stdout
-    except Exception as e:
+    except Exception:
         pass
-
-    # 备用方案：pyperclip
+    # 回退: pyperclip
     try:
         import pyperclip
         return pyperclip.paste()
@@ -76,12 +97,21 @@ def get_clipboard():
 
 def set_clipboard(text):
     """安全设置剪贴板内容"""
+    # 优先使用 AppKit 原生 API
+    if _HAS_APPKIT:
+        try:
+            from AppKit import NSStringPboardType
+            _pasteboard.clearContents()
+            _pasteboard.setString_forType_(text, NSStringPboardType)
+            return True
+        except Exception:
+            pass
+    # 回退方案
     try:
         import pyperclip
         pyperclip.copy(text)
         return True
     except Exception as e:
-        # 尝试使用pbcopy作为备用方案
         try:
             process = subprocess.Popen(['pbcopy'], stdin=subprocess.PIPE)
             process.communicate(text.encode('utf-8'))
@@ -144,25 +174,37 @@ async def clipboard_sync():
                 async def send():
                     nonlocal last_clipboard
                     consecutive_errors = 0
+                    last_change_count = get_clipboard_change_count()
                     while True:
                         try:
-                            current = get_clipboard()
-                            if current is not None:
-                                consecutive_errors = 0
-                                if current and current != last_clipboard:
-                                    last_clipboard = current
-                                    await ws.send(json.dumps({
-                                        "type": "clipboard",
-                                        "text": current,
-                                        "source": "macos"
-                                    }))
-                                    log(f"[上传] 已发送剪贴板 ({len(current)} 字符)")
+                            # 先用 changeCount 快速判断剪贴板是否变化 (几乎零开销)
+                            changed = False
+                            if _HAS_APPKIT:
+                                current_count = get_clipboard_change_count()
+                                if current_count != last_change_count:
+                                    last_change_count = current_count
+                                    changed = True
                             else:
-                                consecutive_errors += 1
-                                if consecutive_errors >= 5:
-                                    log("连续获取剪贴板失败，尝试恢复...")
+                                changed = True
+
+                            if changed:
+                                current = get_clipboard()
+                                if current is not None:
                                     consecutive_errors = 0
-                                    await asyncio.sleep(2)
+                                    if current and current != last_clipboard:
+                                        last_clipboard = current
+                                        await ws.send(json.dumps({
+                                            "type": "clipboard",
+                                            "text": current,
+                                            "source": "macos"
+                                        }))
+                                        log(f"[上传] 已发送剪贴板 ({len(current)} 字符)")
+                                else:
+                                    consecutive_errors += 1
+                                    if consecutive_errors >= 5:
+                                        log("连续获取剪贴板失败，尝试恢复...")
+                                        consecutive_errors = 0
+                                        await asyncio.sleep(2)
                         except Exception as e:
                             log(f"发送失败: {e}")
                         await asyncio.sleep(CHECK_INTERVAL)
