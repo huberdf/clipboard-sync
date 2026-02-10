@@ -143,10 +143,11 @@ async def clipboard_sync():
             import websockets
             async with websockets.connect(
                 SERVER_URL,
-                extra_headers={"Authorization": f"Bearer {CLIENT_SECRET}"},
+                additional_headers={"Authorization": f"Bearer {CLIENT_SECRET}"},
                 ping_interval=20,  # 保活ping
                 ping_timeout=10,
-                close_timeout=5
+                close_timeout=5,
+                proxy=None  # 直连服务器，不走系统代理
             ) as ws:
                 set_state(ConnectionState.CONNECTED)
                 reconnect_count = 0  # 重置重连计数
